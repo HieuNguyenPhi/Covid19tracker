@@ -1,0 +1,457 @@
+
+library(flexdashboard)
+library(dplyr)
+#library(nCov2019)
+#library(coronavirus)
+library(ggplot2)
+library(ggthemes)
+#library(ggrepel)
+library(plotly)
+library(countrycode)
+library(maps)
+library(ggmap)
+library(R0)
+register_google(key = "AIzaSyC5H17pUi5iH_cIB9xNfLF8zf5tLhZUcXE")
+confirmed_sheet <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv"
+deaths_sheet <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv"
+#recovered_sheet <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/blob/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_recovered_global.csv"
+confirmed <- readr::read_csv(confirmed_sheet, col_types = readr::cols())
+#recovered <- readr::read_csv(recovered_sheet, col_types = readr::cols())
+deaths <- readr::read_csv(deaths_sheet, col_types = readr::cols())
+confirmed$type <- "confirmed"
+#recovered$type <- "recovered"
+deaths$type <- "death"
+rename_sheets <- function(df){
+  names(df)[1:4] <- c(
+    "state",
+    "country",
+    "lat", 
+    "lon"
+  )
+  return(df)
+}
+pivot <- function(df){
+  tidyr::pivot_longer(
+    df, 
+    tidyselect::contains("/"),
+    names_to = c("date"),
+    values_to = c("cases"),
+    values_ptypes = list(cases = "character")
+  )
+}
+confirmed <- rename_sheets(confirmed)
+#recovered <- rename_sheets(recovered)
+deaths <- rename_sheets(deaths)
+confirmed <- pivot(confirmed)
+#recovered <- pivot(recovered)
+deaths <- pivot(deaths)
+df <- dplyr::bind_rows(confirmed, deaths) %>% 
+  dplyr::mutate(
+    date = as.Date(date, format = "%m/%d/%y"),
+    cases = trimws(cases),
+    cases = as.numeric(cases),
+    cases = dplyr::case_when(
+      is.na(cases) ~ 0,
+      TRUE ~ cases
+    ),
+    country = dplyr::case_when(
+      country == "US" ~ "United States of America",
+      TRUE ~ country
+    ),
+    country_iso2c = countrycode::countrycode(country, "country.name", "iso2c")
+  )
+#class(df)
+virus <- list(jhu = df)
+
+#virus <- crawl_coronavirus()
+#nowncov <- get_nCov2019(lang='en')
+#now_global <- nowncov['global',]
+#china <- nowncov[]
+library(deSolve)
+map2 <- virus$jhu %>%
+  filter(type == "confirmed") %>%
+  #tidyr::pivot_wider(c(state, country),names_from = type, values_from = c(cases))
+  group_by(country, date) %>%
+  summarise(cases = sum(cases, na.rm = TRUE)) %>%
+  ungroup()%>%
+  rename(region = country) %>%
+  mutate(region = ifelse(region =="Mainland China", "China", region))
+map <- map2 %>%
+  filter(date == max(map2$date))%>%
+  arrange(desc(cases))
+timedeathglobal <- virus$jhu %>%
+  filter(type == "death") %>%
+  group_by(date) %>%
+  summarise(cases = sum(cases, na.rm = TRUE)) %>%
+  mutate(date = as.Date(date)) %>%
+  group_by(date) %>%
+  filter(date == max(date)) %>% 
+  filter(cases == max(cases)) %>% 
+  ungroup() %>%
+  arrange(desc(date)) %>%
+  mutate(type = "Death")
+map1 <- timedeathglobal %>%
+  filter(date == max(date))
+```
+
+Information overview {data-navmenu="Analysis"}
+==================================
+  
+  
+  Row
+-----------------------------------------------------------------------
+  
+  ### Total Confirmed
+  
+  ```{r}
+valueBox(prettyNum(sum(map$cases),big.mark = ","), icon = "ion-android-person-add", color = "warning")
+```
+
+### Total Deaths
+
+```{r}
+valueBox(prettyNum(sum(map1$cases),big.mark = ","),icon = "ion-heart-broken", color = "danger")
+```
+
+Row {data-height=650}
+-----------------------------------------------------------------------
+  
+  ### Global Corona Confirmed Cases
+  
+  ```{r}
+worldmap <- map_data("world")
+
+country <- data.frame(region = unique(virus$jhu$country))
+country$region <- as.character(country$region)
+country$region <- ifelse(country$region == "Mainland China", "China", country$region)
+
+records2 <- mutate_geocode(country,region)
+map2 <- merge(records2,map2, by ="region")
+map2 <- map2 %>%
+  mutate(date = as.character(date))
+g <- ggplot()+
+  geom_polygon(data = worldmap, aes(x= long, y = lat, group = group),fill = "grey") +
+  geom_point(data = map2, aes(x = lon, y = lat, size = cases,ids = region, frame = date), color = "darkred", alpha = 0.5) +
+  scale_size_area() +
+  labs(y ="", x= "")+
+  theme_economist_white()
+ggplotly(g, tooltip = c("region","cases","date")) %>%
+  config(displayModeBar = FALSE)
+```
+
+
+Row
+-----------------------------------------------------------------------
+  
+  ### Global Time series
+  
+  ```{r}
+timedataglobal <- virus$jhu %>%
+  filter(type == "confirmed") %>%
+  group_by(date) %>%
+  summarise(cases = sum(cases, na.rm = TRUE)) %>%
+  mutate(date = as.Date(date)) %>%
+  group_by(date) %>%
+  filter(date == max(date)) %>% 
+  filter(cases == max(cases)) %>% 
+  ungroup() %>%
+  arrange(desc(date))
+x <- rev(1:nrow(timedataglobal))
+y <- timedataglobal$cases
+model2 <- nls(y ~ (x ^ b), start = c(b = 2), trace = F)
+predict_days <- 5
+
+x <- rev(1:(nrow(timedataglobal) + predict_days))
+pred <- x ^ coef(model2)
+dates <- seq.Date(min(timedataglobal$date), max(timedataglobal$date) + predict_days, by = "days")
+
+timeconfirmglobal <- timedataglobal %>%
+  mutate(type = "Confirmed")
+
+timepredglobal <- data.frame(date = rev(dates),
+                             cases = round(pred),
+                             type = "Predict")
+
+#timerecoverglobal <- virus$jhu %>%
+#  filter(type == "recovered") %>%
+#  group_by(date) %>%
+#  summarise(cases = sum(cases, na.rm = TRUE)) %>%
+#  mutate(date = as.Date(date)) %>%
+#  group_by(date) %>%
+#  filter(date == max(date)) %>% 
+#  filter(cases == max(cases)) %>% 
+#  ungroup() %>%
+#  arrange(desc(date)) %>%
+#  mutate(type = "Recovered")
+
+dfs <- rbind(timeconfirmglobal[-1,], timedeathglobal[-1,], timepredglobal)
+#head(timeconfirmglobal[-nrow(timeconfirmglobal),])
+
+p <- ggplot(dfs, aes(x = date, y = cases, col = type)) +
+  geom_line() +
+  #geom_point() +
+  theme_economist() +
+  theme(legend.position = "right", legend.title = element_blank()) + 
+  labs(y="", x="Date")
+
+ggplotly(p, tooltip = c("y","x")) %>%
+  layout(hovermode = "x", font =list(family ="sans", size = 18)) %>%
+  config(displayModeBar = FALSE)
+```
+
+
+### Global Latest Update
+
+```{r}
+df <- head(map,10)
+df$Country <- paste(df$region,"(",df$cases,")")
+df$region <- factor(df$region, levels = rev(df$region))
+renderPlot({
+  ggplot(df, aes(x = (region), y = cases)) +
+    geom_bar(stat = "identity", fill = alpha("#69b3a2", 0.8)) +
+    coord_polar(theta = "y") +
+    theme_economist_white() +
+    theme(legend.position = "none",
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.line = element_blank(),
+          axis.text.y = element_blank(),
+          axis.text.x = element_blank(),
+          axis.ticks = element_blank()) +
+    ylim(0,max(map$cases)+20000) +
+    geom_text(data = df, hjust = 1, size = 3,
+              aes(x = region, y = 0, label = Country)) +
+    labs(y ="Latest confirmed", x = "")
+})
+```
+
+
+Row
+-----------------------------------------------------------------------
+  
+  ### $R_0$ summary
+  
+  ```{r}
+timedataglobal <- virus$jhu %>%
+  filter(type == "confirmed") %>%
+  group_by(date) %>%
+  summarise(cases = sum(cases, na.rm = TRUE)) %>%
+  mutate(date = as.Date(date)) %>%
+  group_by(date) %>%
+  filter(date == max(date)) %>% 
+  filter(cases == max(cases)) %>% 
+  ungroup()
+
+timedataglobal$incidence = rep(NA, nrow(timedataglobal))
+timedataglobal$incidence[-nrow(timedataglobal)] = c(head(timedataglobal$cases,1),diff(timedataglobal[-nrow(timedataglobal),]$cases,1))
+
+GT.corona <- generation.time("gamma", c(8.0, 3.6))
+R0.est <- estimate.R(timedataglobal$incidence[-nrow(timedataglobal)], GT = GT.corona, methods = c("EG","ML","SB","TD"))
+
+R0 <- data.frame(Type = c("Exponential Growth","Maximum Likelihood","Sequential Bayesian","Time Dependence"),
+                 R0 = c(R0.est$estimates$EG$R, R0.est$estimates$ML$R,tail(R0.est$estimates$SB$R,1),
+                        R0.est$estimates$TD$R[length(R0.est$estimates$TD$R)-1]),
+                 CI.Lower = c(R0.est$estimates$EG$conf.int[1],R0.est$estimates$ML$conf.int[1],
+                              tail(R0.est$estimates$SB$conf.int$CI.lower.,1), 
+                              R0.est$estimates$TD$conf.int$lower[length(R0.est$estimates$TD$conf.int$lower)-1]),
+                 CI.Upper = c(R0.est$estimates$EG$conf.int[2],R0.est$estimates$ML$conf.int[2],
+                              tail(R0.est$estimates$SB$conf.int$CI.upper.,1),
+                              R0.est$estimates$TD$conf.int$upper[length(R0.est$estimates$TD$conf.int$upper)-1]))
+gg<- ggplot(R0, aes(x = Type, y = R0, group = 1))+
+  geom_point(aes(color = Type))+
+  geom_errorbar(aes(ymin = CI.Lower, ymax = CI.Upper, color = Type))+
+  theme_economist()+
+  theme(legend.position = "none")
+ggplotly(gg) %>%
+  config(displayModeBar = FALSE)
+```
+
+### Time-dependent $R_0$
+
+```{r}
+R0.TD <- data.frame(Date = timedataglobal$date,R0 = c(R0.est$estimates$TD$R, rep(NA,length(timedataglobal$date) - length(R0.est$estimates$TD$R))),
+                    CI.Lower = c(R0.est$estimates$TD$conf.int$lower, rep(NA,length(timedataglobal$date) - length(R0.est$estimates$TD$R))),
+                    CI.Upper = c(R0.est$estimates$TD$conf.int$upper, rep(NA,length(timedataglobal$date) - length(R0.est$estimates$TD$R))))
+R0.TD <- R0.TD[complete.cases(R0.TD),]
+row_sub <- apply(R0.TD[,-1], 1, function(row) all(row != 0))
+R0.TD <- R0.TD[row_sub,]
+gg <- ggplot(R0.TD, aes(x = Date, y = R0))+
+  geom_line()+
+  geom_ribbon(aes(ymin = CI.Lower, ymax = CI.Upper), alpha = 0.2)+
+  theme_economist()
+ggplotly(gg, tooltip = c("y","x") ) %>%
+  config(displayModeBar = FALSE)
+```
+
+Row
+-----------------------------------------------------------------------
+  
+  ### SIR Effective contact rate
+  
+  ```{r}
+N <- 7764400000 #world population
+SIR <- function(time, state, parameters){
+  par <- as.list(c(state, parameters))
+  with(par,{
+    dS <- -beta * I * S/N
+    dI <- beta * I * S/N - gamma*I
+    dR <- gamma*I
+    list(c(dS,dI,dR))
+  })
+}
+
+init <- c(S = N-timedataglobal$cases[1], I = timedataglobal$cases[1], R = 0)
+RSS <- function(parameters) {
+  names(parameters) <- c("beta", "gamma")
+  out <- ode(y = init, times = Day <- 1:length(timedataglobal$date), func = SIR, parms = parameters)
+  fit <- out[ , 3]
+  sum((timedataglobal$cases - fit)^2)
+}
+
+Opt <- optim(c(0.5, 0.5), RSS, method = "L-BFGS-B", lower = c(0, 0), upper = c(1, 1)) # optimize with some sensible conditions
+Opt_par <- setNames(Opt$par, c("beta", "gamma"))
+t <- 1:100 # time in days
+fit <- data.frame(ode(y = init, times = t, func = SIR, parms = Opt_par))
+tt <- as.numeric(rownames(fit[fit$I == max(fit$I),]))
+day <- as.Date(timedataglobal$date[1])+tt
+valueBox(round(Opt_par[1],2), icon = "ion-alert-circled", color = "danger")
+```
+
+### SIR Removal rate
+
+```{r}
+valueBox(round(Opt_par[2],2), icon = "ion-android-bulb", color = "success")
+```
+
+### SIR Predictive total infected on `r day`
+
+```{r}
+valueBox(prettyNum(round(max(fit$I)),big.mark = ","), icon = "ion-android-person-add", color = "warning")
+```
+
+### SIR Predictive total deaths with 2% morality rate
+
+```{r}
+valueBox(prettyNum(max(fit$I)*0.02,big.mark = ","), icon = "ion-heart-broken", color = "danger")
+```
+
+### SIR $R_0$
+
+```{r}
+valueBox(round(Opt_par["beta"] / Opt_par["gamma"],2), icon = "ion-android-globe", color = "warning")
+```
+
+
+
+########### VIETNAM
+
+#worldmap <- map_data("world")
+vietname <- map_data("world", region = "vietnam")
+vietnam <- worldmap %>%
+  filter(region == "Vietnam")
+vietnam<-subset(worldmap, region %in% c("Vietnam","Cambodia", "Laos", "China", "Thailand"))
+levels(factor(vietnam$subregion))
+tail(vietnam,20)
+#vietname[vietname$subregion == 3,]
+vietnam <- vietname %>%
+  group_by(subregion) %>%
+  summarise(long = mean(long), lat = mean(lat))
+xmin<-102
+xmax<-110
+ymin<-8
+ymax<-25
+ggplot() + geom_polygon(data = vietnam, aes(x=long, y = lat, group = group), fill = NA, color = "black") +
+  coord_fixed(xlim = c(xmin, xmax), ylim = c(ymin, ymax))
+
+library(raster)
+vietnam  <- getData("GADM",country="Vietnam",level=1)
+china    <- getData("GADM",country="China",level=0)
+laos     <- getData("GADM",country="Laos",level=0)
+cambodia <- getData("GADM",country="Cambodia",level=0)
+thailand <- getData("GADM",country="Thailand",level=0)
+ggplot(vietnam,aes(x=long,y=lat,group=group))+
+  geom_polygon(aes(fill=id),color="grey30")+
+  geom_polygon(data=china,fill="grey60",color="grey80")+
+  geom_polygon(data=laos,fill="grey60",color="grey80")+
+  geom_polygon(data=cambodia,fill="grey60",color="grey80")+
+  geom_polygon(data=thailand,fill="grey60",color="grey80")+
+  coord_map(xlim=c(-1,1)+bbox(vietnam)["x",],ylim=c(-1,1)+bbox(vietnam)["y",])+
+  scale_fill_discrete(guide="none")+
+  theme_bw()+theme(panel.grid=element_blank())
+plot(vietnam)
+library(tmap)
+qtm(vietnam)
+
+
+library(rvest)
+scotusURL <- "https://en.wikipedia.org/wiki/2020_coronavirus_pandemic_in_Vietnam"
+temp <- scotusURL %>% 
+  xml2::read_html() %>%
+  html_nodes("table")
+df <- html_table(temp[4]) ## Just the "legend" table
+df <- as.data.frame(df)
+colnames(df) <- c("City","Confirmed","Recovered")
+df <- df[-nrow(df),]
+df$Confirmed <- as.numeric(df$Confirmed)
+df$Recovered <- as.numeric(df$Recovered)
+head(vietnam)
+levels(factor(vietnam$VARNAME_1))
+vietnam$Confirmed <- rep(NA, nrow(vietnam))
+vietnam$Recovered <- rep(NA, nrow(vietnam))
+for (i in 1:nrow(df))
+{
+  for (j in 1:nrow(vietnam)){
+    if (df$City[i] == vietnam$VARNAME_1[j]){
+      vietnam$Confirmed[j] = df$Confirmed[i]
+      vietnam$Recovered[j] = df$Recovered[j]
+    }
+  }
+}
+
+p <- qtm(vietnam, "Confirmed")
+ggplot(vietnam) +
+  geom_sf()
+ggplotly(p)
+
+library(rworldmap)
+#library(rworldxtra)
+world_worldmap <- getMap(resolution = "low")
+world_worldmap <- sf::st_as_sf(world_worldmap)
+qtm(world_worldmap)
+vn <- world_worldmap %>%
+  filter(NAME == "Vietnam")
+qtm(vn)
+glimpse(world_worldmap)
+glimpse(vn)
+
+library(maps)
+vna <- sf::st_as_sf(map("vietnam", plot = FALSE, fill = TRUE))
+
+library(RDSTK)
+street2coordinates("Afghanistan")
+library(rtweet)
+lookup_coords("Afghanistan")
+
+
+
+records2 <- mutate_geocode(country,region)
+saveRDS(record2,"countrycode.rds")
+for(i in 1:nrow(country))
+{
+  for (j in )
+  if(country$region[i] )
+}
+
+
+recordsn <- geocode_OSM(country$region[1])$coords
+
+class(country$region)
+
+library("geonames")
+GNcountryInfo("Afghanistan")
+GNcountryInfo(country="IT")
+
+library(nominatim)
+osm_geocode("Afghanistan")
+library(tmaptools)
+geocode_OSM("Afghanistan")
