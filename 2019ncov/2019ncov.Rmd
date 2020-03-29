@@ -21,7 +21,7 @@ library(countrycode)
 library(maps)
 library(ggmap)
 library(R0)
-register_google(key = "AIzaSyC5H17pUi5iH_cIB9xNfLF8zf5tLhZUcXE")
+register_google(key = "XXX")
 confirmed_sheet <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv"
 deaths_sheet <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv"
 #recovered_sheet <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/blob/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_recovered_global.csv"
